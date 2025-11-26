@@ -1,0 +1,397 @@
+
+
+-- ==============================================================================
+-- SCRIPT MAESTRO DE CONFIGURACIÓN DE BASE DE DATOS VIRALZIA (V3.8)
+-- ==============================================================================
+-- Copia todo este contenido y ejecútalo en el SQL Editor de Supabase.
+-- Este script es seguro: No borrará tus datos existentes. Solo agregará lo que falte.
+-- ==============================================================================
+
+-- 1. Habilitar extensiones necesarias
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- ==============================================================================
+-- TABLA 1: SESSIONS (Sesiones de trabajo)
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES auth.users NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
+    title TEXT,
+    original_transcript TEXT,
+    analysis JSONB,
+    generated_scripts JSONB,
+    image_prompts JSONB,
+    storyboard_images JSONB,
+    generated_images JSONB,
+    generated_audio_base64 TEXT,
+    social_metadata JSONB,
+    chat_history JSONB,
+    -- Nuevos campos para Rendimiento y Auditoría
+    status TEXT DEFAULT 'idea', -- 'idea', 'scripting', 'production', 'published', 'viral', 'archived'
+    published_title TEXT,
+    published_description TEXT,
+    published_url TEXT,
+    published_at TIMESTAMP WITH TIME ZONE,
+    published_platform TEXT
+);
+
+-- MIGRACIONES SEGURAS (Agregan columnas si no existen) -------------------------
+
+-- 1. Social Metadata
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'social_metadata') THEN
+        ALTER TABLE sessions ADD COLUMN social_metadata JSONB;
+    END IF;
+END $$;
+
+-- 2. Chat History
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'chat_history') THEN
+        ALTER TABLE sessions ADD COLUMN chat_history JSONB;
+    END IF;
+END $$;
+
+-- 3. Generated Audio (CRÍTICO PARA FIX AUTOSAVE)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'generated_audio_base64') THEN
+        ALTER TABLE sessions ADD COLUMN generated_audio_base64 TEXT;
+    END IF;
+END $$;
+
+-- 4. Generated Images (CRÍTICO PARA FIX AUTOSAVE)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'generated_images') THEN
+        ALTER TABLE sessions ADD COLUMN generated_images JSONB;
+    END IF;
+END $$;
+
+-- 5. Storyboard Images (CRÍTICO PARA FIX AUTOSAVE)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'storyboard_images') THEN
+        ALTER TABLE sessions ADD COLUMN storyboard_images JSONB;
+    END IF;
+END $$;
+
+-- 6. Status & Performance Tracking (NUEVO)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'status') THEN
+        ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'idea';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'published_title') THEN
+        ALTER TABLE sessions ADD COLUMN published_title TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'published_description') THEN
+        ALTER TABLE sessions ADD COLUMN published_description TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'published_url') THEN
+        ALTER TABLE sessions ADD COLUMN published_url TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'published_at') THEN
+        ALTER TABLE sessions ADD COLUMN published_at TIMESTAMP WITH TIME ZONE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'published_platform') THEN
+        ALTER TABLE sessions ADD COLUMN published_platform TEXT;
+    END IF;
+END $$;
+
+-- FIN MIGRACIONES --------------------------------------------------------------
+
+-- Habilitar seguridad (RLS)
+ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
+
+-- POLITICAS DE SEGURIDAD REFORZADAS
+-- Borrar políticas anteriores para asegurar una versión limpia
+DROP POLICY IF EXISTS "Users can manage their own sessions" ON sessions;
+DROP POLICY IF EXISTS "Users can delete their own sessions" ON sessions;
+
+-- Política General (SELECT, INSERT, UPDATE)
+CREATE POLICY "Users can manage their own sessions" ON sessions
+    USING (auth.uid() = user_id)
+    WITH CHECK (auth.uid() = user_id);
+
+-- Política Específica de Borrado (Para garantizar que funcione)
+CREATE POLICY "Users can delete their own sessions" ON sessions
+    FOR DELETE
+    USING (auth.uid() = user_id);
+
+-- ==============================================================================
+-- TABLA 2: BRAND_KIT (Kit de Marca)
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS brand_kit (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES auth.users NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    tone_of_voice TEXT,
+    visual_style TEXT,
+    target_audience TEXT,
+    content_language TEXT DEFAULT 'es',
+    gemini_api_key TEXT
+);
+
+-- Migraciones Brand Kit
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'brand_kit' AND column_name = 'content_language') THEN
+        ALTER TABLE brand_kit ADD COLUMN content_language TEXT DEFAULT 'es';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'brand_kit' AND column_name = 'gemini_api_key') THEN
+        ALTER TABLE brand_kit ADD COLUMN gemini_api_key TEXT;
+    END IF;
+END $$;
+
+-- Habilitar seguridad (RLS)
+ALTER TABLE brand_kit ENABLE ROW LEVEL SECURITY;
+
+-- Crear política de seguridad
+DROP POLICY IF EXISTS "Users can manage their own brand kit" ON brand_kit;
+CREATE POLICY "Users can manage their own brand kit" ON brand_kit
+    USING (auth.uid() = user_id)
+    WITH CHECK (auth.uid() = user_id);
+
+-- ==============================================================================
+-- TABLA 3: LANDING_PAGE_ANALYSES (Radar de Tendencias)
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS landing_page_analyses (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES auth.users NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    url TEXT,
+    product_description JSONB,
+    value_proposition JSONB,
+    ideal_avatar JSONB,
+    landing_page_structure JSONB,
+    mental_triggers JSONB,
+    branding_style JSONB,
+    strategic_recommendations JSONB,
+    conclusion TEXT,
+    buyer_personas JSONB,
+    initial_problems_and_solutions JSONB,
+    growth_problems_and_solutions JSONB
+);
+
+-- Habilitar seguridad (RLS)
+ALTER TABLE landing_page_analyses ENABLE ROW LEVEL SECURITY;
+
+-- Crear política de seguridad
+DROP POLICY IF EXISTS "Users can manage their own analyses" ON landing_page_analyses;
+CREATE POLICY "Users can manage their own analyses" ON landing_page_analyses
+    USING (auth.uid() = user_id)
+    WITH CHECK (auth.uid() = user_id);
+
+-- ==============================================================================
+-- TABLA 4: SOCIAL_ACCOUNTS (Conexiones OAuth)
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS social_accounts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES auth.users NOT NULL,
+    platform TEXT NOT NULL, -- 'TikTok', 'Instagram', 'YouTube'
+    access_token TEXT,      -- Token de acceso
+    refresh_token TEXT,
+    token_expires_at TIMESTAMP WITH TIME ZONE,
+    connected_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    metadata JSONB,          -- Datos extra del perfil
+    client_id TEXT,         
+    client_secret TEXT      
+);
+
+-- Migraciones Social Accounts
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'social_accounts' AND column_name = 'client_id') THEN
+        ALTER TABLE social_accounts ADD COLUMN client_id TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'social_accounts' AND column_name = 'client_secret') THEN
+        ALTER TABLE social_accounts ADD COLUMN client_secret TEXT;
+    END IF;
+END $$;
+
+
+-- Habilitar seguridad (RLS)
+ALTER TABLE social_accounts ENABLE ROW LEVEL SECURITY;
+
+-- Crear política de seguridad
+DROP POLICY IF EXISTS "Users can manage their own social accounts" ON social_accounts;
+CREATE POLICY "Users can manage their own social accounts" ON social_accounts
+    USING (auth.uid() = user_id)
+    WITH CHECK (auth.uid() = user_id);
+
+
+-- ==============================================================================
+-- TABLA 5: ACCESS_REQUESTS (Solicitudes de Invitación)
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS access_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email TEXT NOT NULL,
+    name TEXT,
+    reason TEXT,
+    status TEXT DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Habilitar seguridad (RLS)
+ALTER TABLE access_requests ENABLE ROW LEVEL SECURITY;
+
+-- Permitir que CUALQUIERA (anon) inserte una solicitud
+DROP POLICY IF EXISTS "Allow public insert requests" ON access_requests;
+CREATE POLICY "Allow public insert requests" ON access_requests FOR INSERT WITH CHECK (true);
+
+-- Permitir que SOLO USUARIOS AUTENTICADOS (Admin) vean y actualicen las solicitudes
+DROP POLICY IF EXISTS "Allow auth read requests" ON access_requests;
+CREATE POLICY "Allow auth read requests" ON access_requests FOR SELECT USING (auth.role() = 'authenticated');
+
+DROP POLICY IF EXISTS "Allow auth update requests" ON access_requests;
+CREATE POLICY "Allow auth update requests" ON access_requests FOR UPDATE USING (auth.role() = 'authenticated');
+
+
+-- ==============================================================================
+-- TABLA 6: PROJECT_METRICS (Bitácora de Rendimiento - NUEVA)
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS project_metrics (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id UUID REFERENCES sessions(id) NOT NULL,
+    user_id UUID REFERENCES auth.users NOT NULL,
+    recorded_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    platform TEXT, -- 'TikTok', 'Instagram', 'YouTube'
+    views INTEGER DEFAULT 0,
+    likes INTEGER DEFAULT 0,
+    comments INTEGER DEFAULT 0,
+    shares INTEGER DEFAULT 0,
+    saves INTEGER DEFAULT 0,
+    watch_time_avg TEXT -- "10s", "50%"
+);
+
+-- Habilitar seguridad (RLS)
+ALTER TABLE project_metrics ENABLE ROW LEVEL SECURITY;
+
+-- Crear política de seguridad
+DROP POLICY IF EXISTS "Users can manage their own metrics" ON project_metrics;
+CREATE POLICY "Users can manage their own metrics" ON project_metrics
+    USING (auth.uid() = user_id)
+    WITH CHECK (auth.uid() = user_id);
+
+
+-- ==============================================================================
+-- TABLA 7: PROFILES (Perfiles y Créditos - NUEVA)
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS profiles (
+    id UUID REFERENCES auth.users ON DELETE CASCADE PRIMARY KEY,
+    credits INTEGER DEFAULT 500, -- Créditos iniciales
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Habilitar seguridad (RLS)
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+
+-- Política: Los usuarios pueden ver su propio perfil
+-- Eliminamos la política si existe para evitar errores de duplicado al correr el script
+DROP POLICY IF EXISTS "Users can view own profile" ON profiles;
+CREATE POLICY "Users can view own profile" ON profiles
+    FOR SELECT USING (auth.uid() = id);
+
+-- FUNCIÓN SEGURA: Deducción de créditos (RPC)
+-- Esta función corre en el servidor y evita que el usuario se ponga créditos infinitos
+CREATE OR REPLACE FUNCTION deduct_credits(amount_to_deduct INTEGER)
+RETURNS INTEGER AS $$
+DECLARE
+    current_credits INTEGER;
+    new_credits INTEGER;
+BEGIN
+    -- Obtener créditos actuales del usuario que llama a la función
+    SELECT credits INTO current_credits FROM profiles WHERE id = auth.uid();
+    
+    IF current_credits IS NULL THEN
+        RAISE EXCEPTION 'Usuario no encontrado';
+    END IF;
+
+    IF current_credits < amount_to_deduct THEN
+        RAISE EXCEPTION 'Créditos insuficientes';
+    END IF;
+
+    new_credits := current_credits - amount_to_deduct;
+
+    -- Actualizar créditos
+    UPDATE profiles SET credits = new_credits WHERE id = auth.uid();
+
+    RETURN new_credits;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- FUNCIÓN SEGURA: Inicialización de créditos (Self-Healing)
+-- Permite crear el perfil de forma segura si falló el trigger inicial o es un usuario antiguo
+CREATE OR REPLACE FUNCTION initialize_user_credits()
+RETURNS void AS $$
+BEGIN
+  INSERT INTO public.profiles (id, credits)
+  VALUES (auth.uid(), 500)
+  ON CONFLICT (id) DO NOTHING;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- TRIGGER: Crear perfil automáticamente al registrarse
+-- Cuando un usuario se crea en auth.users, le creamos su entrada en profiles con 500 créditos
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (id, credits)
+  VALUES (new.id, 500);
+  RETURN new;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Vincular trigger (si no existe ya)
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+
+
+-- ==============================================================================
+-- MIGRACIÓN FINAL: ASEGURAR BORRADO EN CASCADA (ON DELETE CASCADE)
+-- ==============================================================================
+DO $$
+BEGIN
+    -- Sessions
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'sessions_user_id_fkey' AND table_name = 'sessions') THEN
+        ALTER TABLE sessions DROP CONSTRAINT sessions_user_id_fkey;
+    END IF;
+    ALTER TABLE sessions ADD CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+    
+    -- Project Metrics (Cascade delete if session is deleted)
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'project_metrics_session_id_fkey' AND table_name = 'project_metrics') THEN
+        ALTER TABLE project_metrics DROP CONSTRAINT project_metrics_session_id_fkey;
+    END IF;
+    ALTER TABLE project_metrics ADD CONSTRAINT project_metrics_session_id_fkey FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE;
+
+    -- Brand Kit
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'brand_kit_user_id_fkey' AND table_name = 'brand_kit') THEN
+        ALTER TABLE brand_kit DROP CONSTRAINT brand_kit_user_id_fkey;
+    END IF;
+    ALTER TABLE brand_kit ADD CONSTRAINT brand_kit_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+    -- Landing Page Analyses
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'landing_page_analyses_user_id_fkey' AND table_name = 'landing_page_analyses') THEN
+        ALTER TABLE landing_page_analyses DROP CONSTRAINT landing_page_analyses_user_id_fkey;
+    END IF;
+    ALTER TABLE landing_page_analyses ADD CONSTRAINT landing_page_analyses_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+    -- Social Accounts
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'social_accounts_user_id_fkey' AND table_name = 'social_accounts') THEN
+        ALTER TABLE social_accounts DROP CONSTRAINT social_accounts_user_id_fkey;
+    END IF;
+    ALTER TABLE social_accounts ADD CONSTRAINT social_accounts_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+END $$;
