@@ -8,6 +8,7 @@ const corsHeaders = {
 }
 
 serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -25,7 +26,7 @@ serve(async (req) => {
       data: { user },
     } = await supabaseClient.auth.getUser()
 
-    if (!user) {
+    if (!user || !user.email) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             status: 401,
@@ -33,14 +34,14 @@ serve(async (req) => {
     }
 
     const ADMIN_EMAIL = 'miura.force@gmail.com';
-    if (user.email !== ADMIN_EMAIL) {
+    // FIX: Case insensitive comparison to avoid 403 errors if user logs in with mixed case
+    if (user.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
          return new Response(JSON.stringify({ error: 'Forbidden: Not an admin' }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             status: 403,
         })
     }
 
-    // Modificación: Recibir redirectTo
     const { email, redirectTo } = await req.json()
 
     if (!email) {
@@ -54,27 +55,28 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    // Usar redirectTo si se proporciona
+    // Invite options
     const inviteOptions: any = {};
     if (redirectTo) {
         inviteOptions.redirectTo = redirectTo;
     }
 
-    // Intentar invitar
+    // Attempt to invite user
     const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, inviteOptions)
 
     if (error) {
         console.log("Invite error:", error.message);
         
-        // Manejo especial: Si el usuario ya existe
+        // Handle case where user is already registered
+        // Return 200 with a specific flag so frontend can handle it gracefully instead of crashing
         if (error.message.includes("already has been registered") || error.status === 422) {
              return new Response(JSON.stringify({ 
                  data: null, 
-                 message: "El usuario ya está registrado. Si no ha entrado, se recomienda eliminarlo y volver a invitarlo, o usar recuperación de contraseña.",
+                 message: "El usuario ya está registrado. Intenta usar la recuperación de contraseña.",
                  userExists: true 
              }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-                status: 200, // Retornamos 200 para que el frontend maneje el mensaje
+                status: 200,
             })
         }
         
@@ -86,8 +88,8 @@ serve(async (req) => {
       status: 200,
     })
 
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+  } catch (error: any) {
+    return new Response(JSON.stringify({ error: error.message || 'Internal Server Error' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 400,
     })

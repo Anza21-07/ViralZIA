@@ -1,3 +1,4 @@
+
 /// <reference lib="dom" />
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../services/supabaseClient';
@@ -37,7 +38,7 @@ const AdminView: React.FC = () => {
     const getRedirectUrl = () => {
         // Si el admin está en localhost, forzamos la redirección a la URL de producción
         // para que el usuario invitado llegue al sitio correcto.
-        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
             return 'https://viral-zia.vercel.app/'; 
         }
         // Si ya estamos en producción (o en otra URL), usamos la actual.
@@ -50,7 +51,7 @@ const AdminView: React.FC = () => {
         try {
             const { data, error } = await supabase.functions.invoke('list-users');
             if (error) throw error;
-            if (data.error) throw new Error(data.error);
+            if (data && data.error) throw new Error(data.error);
 
             setUsers(data.users || []);
         } catch (err: any) {
@@ -106,7 +107,7 @@ const AdminView: React.FC = () => {
             });
 
             if (inviteError) throw inviteError;
-            if (data.error) throw new Error(data.error);
+            if (data && data.error) throw new Error(data.error);
 
             // 2. Actualizar estado en DB local
             const { error: dbError } = await supabase
@@ -141,19 +142,26 @@ const AdminView: React.FC = () => {
                 },
             });
 
-            if (inviteError) throw inviteError;
+            if (inviteError) {
+                console.error("Invite Function Error:", inviteError);
+                throw new Error(inviteError.message || "Error invocando la función de invitación.");
+            }
             
             if (data && data.userExists) {
-                 alert(`El usuario ya está registrado. ${data.message}`);
-            } else if (data.error) {
+                 alert(`Aviso: ${data.message}`);
+            } else if (data && data.error) {
                  throw new Error(data.error);
             } else {
                  alert(`Nueva invitación enviada correctamente a ${request.email}`);
             }
 
         } catch (err: any) {
-            console.error(err);
-            alert(`Error al reenviar: ${err.message}`);
+            console.error("Resend Invite Error:", err);
+            let msg = err.message;
+            if (msg.includes("non-2xx")) {
+                msg = "Error del servidor (500). Verifica que tu email de Admin sea correcto y que la función 'invite-user' esté desplegada.";
+            }
+            alert(msg);
         } finally {
             setProcessingId(null);
         }
@@ -194,7 +202,7 @@ const AdminView: React.FC = () => {
             });
 
             if (error) throw error;
-            if (data.error) throw new Error(data.error);
+            if (data && data.error) throw new Error(data.error);
 
             setInviteMessage(`Invitación enviada con éxito a ${inviteEmail}.`);
             setInviteEmail('');
@@ -259,7 +267,7 @@ const AdminView: React.FC = () => {
             });
 
             if (error) throw error;
-            if (data.error) throw new Error(data.error);
+            if (data && data.error) throw new Error(data.error);
 
             // Refresh list
             setUsers(users.filter(u => u.id !== userId));
